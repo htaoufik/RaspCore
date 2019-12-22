@@ -11,7 +11,7 @@ namespace RaspCore
 
         class Constants
         {
-            public const int SensorFilterThresholdInMs = -1;
+            public const int SensorFilterThresholdInMs = -1; // -1 means deactivated, no filtering
         }
 
 
@@ -31,7 +31,10 @@ namespace RaspCore
         private GpioPin _backwardPin;
         private GpioPin _sensorPin;
 
-        
+        private const int _maxSpeed = 255;
+        private const int _minSpeed = 100;
+
+
 
         public Motor(GpioPin forwardPin, GpioPin backwardPin, GpioPin pwmPin, GpioPin sensorPin)
         {
@@ -39,6 +42,7 @@ namespace RaspCore
             _backwardPin = backwardPin;
             _sensorPin = sensorPin;
             _pwmPin = pwmPin;
+
         }
 
 
@@ -48,13 +52,22 @@ namespace RaspCore
             _forwardPin.PinMode = GpioPinDriveMode.Output;
             _backwardPin.PinMode = GpioPinDriveMode.Output;
 
-            _pwmPin.StartSoftPwm(0, 255);
+
+            // As we have a bit too much power for our motors, we set the pwm to 500 max but limit the range to 255 max
+            _pwmPin.StartSoftPwm(0, 500); 
+           
+
+            //_pwmPin.PinMode = GpioPinDriveMode.Output;
+
+            //_pwmPin.PinMode = GpioPinDriveMode.PwmOutput;
+            //_pwmPin.PwmMode = PwmMode.Balanced;
+
+
             SetSpeed(0);
 
             _sensorPin.PinMode = GpioPinDriveMode.Input;
-            _sensorPin.RegisterInterruptCallback(EdgeDetection.RisingEdge, this.SensorInterupt);
-
-
+            _sensorPin.InputPullMode = GpioPinResistorPullMode.PullUp;
+            _sensorPin.RegisterInterruptCallback(EdgeDetection.RisingAndFallingEdges, this.SensorInterupt);
 
         }
 
@@ -62,8 +75,6 @@ namespace RaspCore
         {
             SensorCount = 0;
         }
-
-        
 
 
         public void MoveForward()
@@ -89,8 +100,32 @@ namespace RaspCore
 
         public void SetSpeed(int value)
         {
+
+           /* if( value == 0 )
+            {
+                _pwmPin.Write(false);
+            }
+            else
+            {
+                _pwmPin.Write(true);
+            }*/
+
+
             CurrentSpeed = value;
-            _pwmPin.SoftPwmValue = value;
+            if (CurrentSpeed > 0)
+            { 
+                CurrentSpeed = Math.Max(CurrentSpeed, _minSpeed);
+            }
+
+            // Limit to max allowed speed
+            if (CurrentSpeed > _maxSpeed)
+            {
+                CurrentSpeed = _maxSpeed;
+            }
+
+
+            _pwmPin.SoftPwmValue = CurrentSpeed;
+            //_pwmPin.PwmRegister = value;
         }
 
         /// <summary>

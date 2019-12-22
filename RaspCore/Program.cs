@@ -49,99 +49,64 @@ namespace RaspCore
             }
         }
 
-        public static void MoveMotor()
-        {
-            var pin = Pi.Gpio[P1.Gpio18];
-            pin.PinMode = GpioPinDriveMode.PwmOutput;
-            pin.PwmMode = PwmMode.MarkSign;
-            pin.PwmClockDivisor = 1;
-            pin.PwmRegister = 850;
-
-            var in1pin = Pi.Gpio.Pin03;
-            in1pin.PinMode = GpioPinDriveMode.Output;
-            var in2pin = Pi.Gpio.Pin04;
-            in2pin.PinMode = GpioPinDriveMode.Output;
-
-            // perform writes to the pin by toggling the isOn variable
-            var isOn = false;
-            for (var i = 0; i < 20; i++)
-            {
-                isOn = !isOn;
-                in1pin.Write(isOn);
-                
-                Console.WriteLine($"Motor ({i})");
-                System.Threading.Thread.Sleep(500);
-            }
-
-            in1pin.Write(false);
-            in2pin.Write(false);
-        }
-
-
         static void Main(string[] args)
         {
-            Console.WriteLine("Gpio Interrupts");
+            
 
             Engine engine = new Engine(
-                    Pi.Gpio[P1.Gpio17], // A Forward
-                    Pi.Gpio[P1.Gpio27], // A Backward
+                    Pi.Gpio[P1.Gpio27], // A Forward
+                    Pi.Gpio[P1.Gpio17], // A Backward
                     Pi.Gpio[P1.Gpio18], // A Pwm
-                    Pi.Gpio[P1.Gpio22], // A Sensor
+                    Pi.Gpio[P1.Gpio23], // A Sensor
                     Pi.Gpio[P1.Gpio05], // B Forward
                     Pi.Gpio[P1.Gpio06], // B Backward
                     Pi.Gpio[P1.Gpio13], // B Pwm
-                    Pi.Gpio[P1.Gpio12]  // B Sensor
+                    Pi.Gpio[P1.Gpio24]  // B Sensor
                 );
 
-            engine.Init();
 
-            /* engine.MoveForward();
-             System.Threading.Thread.Sleep(2000);
-             engine.Stop();
-             engine.PrintSensorCount();
-             engine.InitSensorCount();
-             System.Threading.Thread.Sleep(1000);
+           /* int speed = 100;
 
-             engine.MoveBackward();
-             System.Threading.Thread.Sleep(1000);
-             engine.Stop();
-             engine.PrintSensorCount();
-             engine.InitSensorCount();
-             System.Threading.Thread.Sleep(1000);
-             */
-
-            /*  engine.SetSpeed(255);
-              engine.TurnLeft();
-              System.Threading.Thread.Sleep(2600);
-              engine.Stop();
-              engine.PrintSensorCount();
-              engine.InitSensorCount();
-              */
-
-
-            // Create an AutoResetEvent to signal the timeout threshold in the
-            // timer callback has been reached.
-            var autoEvent = new AutoResetEvent(false);
-
-            engine.MoveForward();
-
-
-            System.Threading.Timer timer = null;
-            timer = new System.Threading.Timer((obj) =>
-                {
-                    engine.Loop();
-                },
-                null, 20, 100);
-
-            engine.SetGoal(30,0);
-
+            engine.SetSpeed(speed);
+            engine.Forward();
             
             Console.ReadKey();
+            Console.WriteLine($"Left Sensor count: {engine.LeftMotor.SensorCount}, Right Sensor count: {engine.RightMotor.SensorCount}");
+            engine.Stop();
+            return;*/
 
-            engine.SetGoal(30, 30);
+             /*int speed = 150;
+             Console.WriteLine($"Start forward at {speed}");
+             engine.SetSpeed(speed);
+             engine.Forward();
+             Console.ReadKey();
+             engine.Stop();
 
+             return;*/
+
+            engine.MoveToPosition(50,0);
+            Console.ReadKey();
+            engine.Stop();
             Console.ReadKey();
 
+
+            
+
+            engine.MoveToPosition(0, 0);
+            Console.ReadKey();
+            engine.Stop();
+            Console.ReadKey();
+
+
+            return;
+
+            engine.MoveToPosition(30, 0);
+            Console.ReadKey();
+            engine.Stop();
+            Console.ReadKey();
+
+            engine.MoveToPosition(0, 0);
+            Console.ReadKey();
             engine.Stop();
 
 
@@ -152,7 +117,7 @@ namespace RaspCore
             }
 
             Console.WriteLine("];");
-
+            Console.ReadKey();
         }
     }
 }

@@ -12,7 +12,7 @@
 
 	
 	<PropertyGroup>
-		<SshDeployHost>192.168.0.107</SshDeployHost>
+		<SshDeployHost>192.168.0.103</SshDeployHost>
 		<SshDeployClean />
 		<SshDeployTargetPath>/home/pi/RaspCore</SshDeployTargetPath>
 		<SshDeployUsername>pi</SshDeployUsername>

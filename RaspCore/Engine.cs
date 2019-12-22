@@ -2,37 +2,64 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
-using System.Runtime.InteropServices;
-using System.Text;
 using System.Threading;
-using Unosquare.RaspberryIO;
 using Unosquare.RaspberryIO.Gpio;
+using Unosquare.Swan;
 
 namespace RaspCore
 {
     class Engine
     {
+        private enum State
+        {
+            Unknown, 
+            MovingToGoal, 
+            Stopped
+        };
+
+        // Pour le moteur du moment:
+        // Taille de roue : 65 mm,  Ratiode reduction = Ratio 34.02, nombre de tick par tour 6 soit 6*34.02 = 204.12
+        // nombre de cm par tick = 6.5 / 204.12 = 0.032
+
 
         class Constants
         {
             // http://rco.fr.nf/index.php/2016/07/03/deplacement-dun-robot/
-            public const double coeffLDist = 0.52 ;
-            public const double coeffRDist = 0.52;
-            public const double coeffLAngl = 2.23;
-            public const double coeffRAngl = 2;
+            public const double CoeffLDist = 0.032; // cm par tick de capteur rouge gauche
+            public const double CoeffRDist = 0.032; // cm par tick de capteur roue droite
+            public const double RAD_TO_DEG = 180 / Math.PI;
+            public const double DEG_TO_RAD = Math.PI / 180;
         }
 
-        private Motor _leftMotor;
-        private Motor _rightMotor;
+
+
+
+        private State _currentState;
+
+        private readonly Motor _leftMotor;
+        private readonly Motor _rightMotor;
+
+        public Motor LeftMotor { get { return _leftMotor; } }
+        public Motor RightMotor { get { return _rightMotor; } }
+
+
+        private readonly Timer _goalTimer;
+        private readonly Stopwatch _goalWatch = new Stopwatch();
+
 
         public List<Point> PositionList;
 
-        public void PrintSensorCount()
-        {
-            Console.WriteLine($"Sensor L: {_leftMotor.SensorCount} Sensor R:{_rightMotor.SensorCount}");
-        }
-
-
+        /// <summary>
+        /// Constructeur
+        /// </summary>
+        /// <param name="motorRMoveForward"></param>
+        /// <param name="motorRMoveBackward"></param>
+        /// <param name="motorRPwm"></param>
+        /// <param name="wheelRSensor"></param>
+        /// <param name="motorLMoveForward"></param>
+        /// <param name="motorLMoveBackward"></param>
+        /// <param name="motorLPwm"></param>
+        /// <param name="wheelLSensor"></param>
         public Engine(
             GpioPin motorRMoveForward,
             GpioPin motorRMoveBackward,
@@ -46,13 +73,38 @@ namespace RaspCore
         {
             _leftMotor = new Motor(motorLMoveForward, motorLMoveBackward,motorLPwm,wheelLSensor);
             _rightMotor = new Motor(motorRMoveForward, motorRMoveBackward, motorRPwm, wheelRSensor);
+
+            _goalTimer = new Timer((obj) =>
+                {
+                    Loop();
+                },
+                null, Timeout.Infinite, Timeout.Infinite);
+
+            Init();
         }
 
 
-        public void InitSensorCount()
+        private void InitSensorCount()
         {
             _leftMotor.InitSensorCount();
             _rightMotor.InitSensorCount();
+        }
+
+        private void Init()
+        {
+            _leftMotor.Init();
+            _rightMotor.Init();
+
+            InitSensorCount();
+            PositionList = new List<Point>();
+
+            Stop();
+        }
+
+        public void TurnLeft()
+        {
+            _leftMotor.MoveForward();
+            _rightMotor.MoveBackward();
         }
 
         public void SetSpeed(int value)
@@ -61,39 +113,19 @@ namespace RaspCore
             _leftMotor.SetSpeed(value);
         }
 
-
-        public void Init()
-        {
-            _leftMotor.Init();
-            _rightMotor.Init();
-
-            InitSensorCount();
-
-            PositionList = new List<Point>();
-        }
-
-        public void TurnLeft()
-        {
-            _rightMotor.MoveForward();
-            /*_leftMotor.MoveForward();
-            _rightMotor.MoveBackward();*/
-        }
-
         public void TurnRight()
         {
-            _leftMotor.MoveForward();
-            /*_rightMotor.MoveForward();
-            _leftMotor.MoveBackward();*/
+            _rightMotor.MoveForward();
+            _leftMotor.MoveBackward();
         }
 
-        public void MoveForward()
+        public void Forward()
         {
-
             _leftMotor.MoveForward();
             _rightMotor.MoveForward();
         }
 
-        public void MoveBackward()
+        public void Backward()
         {
             _leftMotor.MoveBackward();
             _rightMotor.MoveBackward();
@@ -103,171 +135,178 @@ namespace RaspCore
         {
             _leftMotor.Stop();
             _rightMotor.Stop();
+            _leftMotor.SetSpeed(0);
+            _rightMotor.SetSpeed(0);
+            _goalTimer.Change(Timeout.Infinite, Timeout.Infinite);
+            _currentState = State.Stopped;
         }
-
 
         //Variables allant contenir les positions du robots
-        double xR = 0;
-        double yR = 0;
-
-
-        public void SetGoal(int x, int y)
-        {
-            xC = x;
-            yC = y;
-        }
-
-
-        //Variables permettant de stocker la position de la cible du robot
-        double xC = 0;
-        double yC = 0;
-
-        //Variables allant contenir les delta position et angle
-        double dDist = 0;
-
+        private double _xR = 0;
+        private double _yR = 0;
 
         //Variable contenant le cap du robot
-        double orientationInDeg = 0;
+        private double _currentAngleInRad = 0;
 
-        //Variable contenant l'angle entre le robot et la cible
-        int consigneOrientation = 0;
+        //Variables permettant de stocker la position de la cible du robot
+        private double _xC = 0;
+        private double _yC = 0;
 
-        //Variable permettant de savoir si la cible est à gauche ou à droite du robot.
-        int signe = 1;
+        public void MoveToPosition(int x, int y)
+        {
+            _xC = x;
+            _yC = y;
 
-        //Variable contenant la distance entre le robot et la cible
-        public double distanceCible = 0;
-
-        //Variables parametrant l'asservissement en angle du robot
-        double coeffP = 1;
-        double coeffD = 1.0;
+            if( _currentState != State.MovingToGoal )
+            { 
+                Forward();
+                _goalTimer.Change(20, 50);
+                _goalWatch.Start();
+                _currentState = State.MovingToGoal;
+            }
+        }
 
         //Variables utilisées pour asservir le robot
-        double erreurAngle = 0;
         double erreurPre = 0;
         double deltaErreur = 0;
-
-        //Variables représentant les commandes à envoyer aux moteurs
-        int cmdG = 0;//Commande gauche
-        int cmdD = 0; //commande droite
-
-        private double dAnglInDeg;
 
         void Log(string log)
         {
             Console.WriteLine(log);
         }
 
-
-
-        public void Loop()
+        private void Loop()
         {
-            Log("-------- LOOP -------------");
+            _goalWatch.Stop();
+            Log($"-------- LOOP { _goalWatch.ElapsedMilliseconds }------------- ");
             Log($"SensorCount L: {_leftMotor.SensorCount } R: {_rightMotor.SensorCount} ");
+            _goalWatch.Restart();
 
-            // Chemin parcouru pendant le dernier intervalle de temps
-            dDist = (Constants.coeffLDist * _leftMotor.SensorCount + Constants.coeffRDist * _rightMotor.SensorCount) / 2.0;
-
-            // L'angle augmente quand on tourne à gauche ( on tourne à gauche quand la roue droite avance )
-            //dAngl = Constants.coeffRAngl * _rightMotor.SensorCount - Constants.coeffLAngl * _leftMotor.SensorCount;
-            //dAngl = dAngl % 360;
-
-
-            double deltaDifn = (Constants.coeffLDist * _leftMotor.SensorCount) -
-                               (Constants.coeffRDist * _rightMotor.SensorCount);
-
-            int L = 15; // Largeur en cm entre les deux roues
-
-            const double RAD_TO_DEG = 180 / Math.PI;
-            const double DEG_TO_RAD =  Math.PI /180;
-
-            double dAnglInRad = -(deltaDifn / L);
-            dAnglInDeg = dAnglInRad * RAD_TO_DEG;
-
-            Log($"Delta since last loop, Distance: {dDist} Angle: {dAnglInDeg} ");
-
-            double deltaXn = dDist * Math.Cos(orientationInDeg * DEG_TO_RAD);
-            double deltaYn = dDist * Math.Sin(orientationInDeg * DEG_TO_RAD);
-
-            // Math.PI / 180 degres vers rad
-            //Actualisation de la position du robot en xy et en orientation
-            xR += deltaXn;
-            yR += deltaYn;
-
-            orientationInDeg += dAnglInDeg;
-            orientationInDeg = orientationInDeg % 360;
-
-            Log($"Current position: xR: {xR} yR: {yR}");
-
-            PositionList.Add(new Point((int)xR, (int)yR));
-
-
-            double distanceCibleY = yC - yR;
-            double distanceCibleX = xC - xR;
-
-            //On calcule la distance séparant le robot de sa cible
-            // As we use Pow2 we don't care if negative
-            distanceCible = Math.Sqrt( Math.Pow((distanceCibleX),2) + Math.Pow((distanceCibleY), 2) );
-
+            int L = 19; // Largeur en cm entre les deux roues
             
 
 
-            double alpha = Math.Acos(Math.Abs(distanceCibleX) / distanceCible) * (180 / Math.PI);
+            // Algo: http://manubatbat.free.fr/doc/positionning/node5.html
+
+            // Chemin parcouru pendant le dernier intervalle de temps en cm
+            double dLeft = Constants.CoeffLDist * _leftMotor.SensorCount;
+            double dRight = Constants.CoeffRDist * _rightMotor.SensorCount;
+            double dDist = (dLeft + dRight) / 2.0;
+            double deltaDifn = dRight - dLeft;
+
+            // Quand la différence entre les deux roue est de 2PiR ( ici R = L ) on a fait un tour complet soit un angle de 2pi
+            // pour deltaDif l'angle parcouru est donc : deltaDif/2piL * 2pi soit deltaDif/L
+            double dAnglInRad = deltaDifn / L;
+
+            double previousAngleInRad = _currentAngleInRad;
+            _currentAngleInRad += dAnglInRad;
+
+            // On garde l'angle en 0 et 2Pi
+            _currentAngleInRad = _currentAngleInRad % (2 * Math.PI);
+
+            // Si l'angle est negatif on le ramène en positif
+            if (_currentAngleInRad < 0)
+            {
+                _currentAngleInRad = (2 * Math.PI) + _currentAngleInRad;
+            }
+
+
+            Log($"Delta since last loop, Distance: {dDist} Angle: {dAnglInRad * Constants.RAD_TO_DEG} ");
+
+            // La distance a été parcouru avec l'angle précédent. ( Estimation de parcour en ligne droite )
+            double deltaXn = dDist * Math.Cos(previousAngleInRad);
+            double deltaYn = dDist * Math.Sin(previousAngleInRad);
+
+            // Math.PI / 180 degres vers rad
+            //Actualisation de la position du robot en xy et en orientation
+            _xR += deltaXn;
+            _yR += deltaYn;
+
+            PositionList.Add(new Point((int)_xR, (int)_yR));
+
+            double distanceCibleY = _yC - _yR;
+            double distanceCibleX = _xC - _xR;
+
+            // On calcule la distance séparant le robot de sa cible
+            // Avec Pythagore
+            // As we use Pow2 we don't care if negative
+            double distanceCible = Math.Sqrt( Math.Pow((distanceCibleX),2) + Math.Pow((distanceCibleY), 2) );
+
+            // Alpha est l'angle entre la cible et l'axe des abscice
+            double alphaInRad = Math.Atan(Math.Abs(distanceCibleY) / Math.Abs(distanceCibleX));
+
+            //double alpha = Math.Acos(Math.Abs(distanceCibleX) / distanceCible) * (180 / Math.PI);
+
+            double angleCibleInRad = 0;
+            if (distanceCibleX > 0 && distanceCibleY > 0)
+            {
+                angleCibleInRad = alphaInRad;
+            }
+            else if (distanceCibleX >= 0 && distanceCibleY < 0)
+            {
+                angleCibleInRad = 2* Math.PI - alphaInRad;
+            }
+            else if (distanceCibleX < 0 && distanceCibleY >= 0)
+            {
+                angleCibleInRad =  Math.PI - alphaInRad;
+            }
+            else if (distanceCibleX < 0 && distanceCibleY < 0)
+            {
+                angleCibleInRad =  Math.PI + alphaInRad;
+            }
+
+            Log($"Current position: xR: {_xR} yR: {_yR} Angle: {_currentAngleInRad * Constants.RAD_TO_DEG} Angle Cible: {angleCibleInRad * Constants.RAD_TO_DEG}");
+
+
             // We must check if C is left or right from the robot
-            bool isRight = distanceCibleY < 0;
-            bool isBehind = distanceCibleX < 0;
+            bool isRight = false;
 
-            //On calcule l'angle de la cible en considérant que le robot est à angle 0
-            double angleVersCibleInDeg = 0;
-            if (isBehind)
+
+            // si l'angle est supérieur à Pi radian ça vaut le coup de tourner à droite 
+            double erreurAngleInRad = angleCibleInRad - _currentAngleInRad;
+
+            if (erreurAngleInRad < 0)
             {
-                if (isRight)
+                isRight = true;
+                erreurAngleInRad = Math.Abs(erreurAngleInRad);
+                // The error is negative, by default it is right, unless the angle is bigger than 180
+                if (erreurAngleInRad > Math.PI)
                 {
-                    angleVersCibleInDeg = 180 + alpha;
+                    isRight = false;
+                    erreurAngleInRad = (2 * Math.PI)- erreurAngleInRad;
                 }
-                else
-                {
-                    angleVersCibleInDeg = 180 - alpha;
-                }  
             }
-            else
+            // It is positif, so by default it is left unless the angle is bigger than 180
+            else if (erreurAngleInRad > Math.PI)
             {
-                angleVersCibleInDeg = alpha;
+                isRight = true;
+                erreurAngleInRad = (2 * Math.PI) - erreurAngleInRad;
             }
 
-            erreurAngle = angleVersCibleInDeg - (orientationInDeg );
 
-            Log($"ErreurAngle: {erreurAngle}");
-
-            Log($"From target: Distance: {distanceCible} Angle:{erreurAngle}");
-
+            Log($"From target: Distance: {distanceCible} Erreur Angle:{erreurAngleInRad * Constants.RAD_TO_DEG}" + (isRight?"Right":"Left") );
 
 
             // On calcule la consigne pour l'orientation
             // Coeff proportionel pour l'orientation
-            int pAngle = 4;
+            float pAngle = 3;
 
-            // si l'angle est supérieur à 180 degrés ça vaut le coup de tourner à droite 
-            if (erreurAngle > 180)
-            {
-                erreurAngle = erreurAngle - 360;
-            }
-
-            // on ramène la consigne à 255 (vitesse max ) : Règle de trois * 255/360
-            consigneOrientation = Math.Abs((int) (255 * erreurAngle* pAngle) / 360) ;
+            // on ramène la consigne à 255 (vitesse max ) : Règle de trois * 255/2Pi
+            int consigneOrientation =(int) Math.Round( Math.Abs( (255 * erreurAngleInRad* pAngle) / (Math.PI *2) ));
 
 
             // Et maintenant on calcule la consigne pour la distance
             // on applique un coeff pour qu'à 1 cm on soit à la vitesse 100 
             // Si la cible est à droite il faut ralentir la vitesse de la roue droite
 
-            int pDirection = 10;
+            int pDirection = 100;
             int maxSpeedFromDistance = (int)Math.Min(distanceCible* pDirection, 255);
 
             // On arrête quand on se raproche de 10 !
-            if (distanceCible <= 10)
+            if (distanceCible <= 3)
             {
-                maxSpeedFromDistance = 0;
+                Log($"Position reached: {_xR},{_yR}");
+                Stop();
             }
 
             Log($"Consigne distance: {maxSpeedFromDistance} direction: {consigneOrientation} " + (isRight ? "R" : "L"));
@@ -279,10 +318,10 @@ namespace RaspCore
             consigneLeft = Math.Max(consigneLeft, 0);
 
             //Calcul de la différence entre l'erreur au coup précédent et l'erreur actuelle.
-            deltaErreur = erreurAngle - erreurPre;
+            deltaErreur = erreurAngleInRad - erreurPre;
 
             //Mise en mémoire de l'erreur actuelle
-            erreurPre = erreurAngle;
+            erreurPre = erreurAngleInRad;
 
             // We must invert it as to turn right we set speed on left etc.
             _leftMotor.SetSpeed(consigneLeft);
